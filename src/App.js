@@ -14,11 +14,11 @@ const axiosGitHubGraphQL = axios.create({
  * @param path
  * @returns {Promise<AxiosResponse<any>>}
  */
-const getIssuesOfRepository = path => {
+const getIssuesOfRepository = (path, cursor) => {
   const [organization, repository] = path.split('/');
   return axiosGitHubGraphQL.post('', {
     query: getIssuesOfRepositoryQuery(organization, repository),
-    variables: { organization, repository },
+    variables: { organization, repository, cursor },
   });
 };
 
@@ -32,14 +32,18 @@ const getIssuesOfRepository = path => {
  * @returns
  */
 const getIssuesOfRepositoryQuery = (organization, repository) => `
-  query ($organization: String!, $repository: String!) {
+  query (
+    $organization: String!,
+    $repository: String!
+    $cursor: String
+  ) {
     organization(login: $organization) {
       name
       url
       repository(name: $repository) {
         name
         url
-        issues(last: 5, states: [OPEN]) {
+        issues(last: 5, after: $cursor, states: [OPEN]) {
           edges {
             node {
               id
@@ -55,16 +59,57 @@ const getIssuesOfRepositoryQuery = (organization, repository) => `
               }
             }
           }
+          totalCount
+          pageInfo {
+            endCursor
+            hasNextPage
+          }
         }
       }
     }
   }
 `;
 
-const resolveIssuesQuery = queryResult => () => ({
-  organization: queryResult.data.data.organization,
-  errors: queryResult.data.errors,
-});
+/**
+ * Update the local state of the App component to keep up with the
+ * pagination of all issues. Handle the incoming response of the
+ * query when the promise resolves, and then return result with
+ * customized structure and organization. Needs to handle initial
+ * request when component mounts the first time, or subsequent
+ * requests with 'More' is selected.
+ *
+ * @param queryResult
+ * @param cursor
+ * @returns {(function(*): ({organization: *, errors: *}))|*}
+ */
+const resolveIssuesQuery = (queryResult, cursor) => state => {
+  const { data, errors } = queryResult.data;
+
+  if (!cursor) {
+    return {
+      organization: data.organization,
+      errors,
+    };
+  }
+
+  const { edges: oldIssues } = state.organization.repository.issues;
+  const { edges: newIssues } = data.organization.repository.issues;
+  const updatedIssues = [...oldIssues, ...newIssues];
+
+  return {
+    organization: {
+      ...data.organization,
+      repository: {
+        ...data.organization.repository,
+        issues: {
+          ...data.organization.repository.issues,
+          edges: updatedIssues,
+        },
+      },
+    },
+    errors,
+  };
+};
 
 const TITLE = 'React GraphQL GitHub Client';
 class App extends Component {
@@ -90,10 +135,17 @@ class App extends Component {
     event.preventDefault();
   };
 
-  onFetchFromGitHub = path => {
-    getIssuesOfRepository(path).then(queryResult =>
-      this.setState(resolveIssuesQuery(queryResult)),
+  onFetchFromGitHub = (path, cursor) => {
+    getIssuesOfRepository(path, cursor).then(queryResult =>
+      this.setState(resolveIssuesQuery(queryResult, cursor)),
     );
+  };
+
+  onFetchMoreIssues = () => {
+    const {
+      endCursor,
+    } = this.state.organization.repository.issues.pageInfo;
+    this.onFetchFromGitHub(this.state.path, endCursor);
   };
 
   render() {
@@ -116,7 +168,11 @@ class App extends Component {
         </form>
         <hr />
         {organization ? (
-          <Organization organization={organization} errors={errors} />
+          <Organization
+            organization={organization}
+            errors={errors}
+            onFetchMoreIssues={this.onFetchMoreIssues}
+          />
         ) : (
           <p>No information yet ...</p>
         )}
@@ -126,13 +182,15 @@ class App extends Component {
 }
 export default App;
 
-const Repository = ({ repository }) => (
+const Repository = ({
+                      repository,
+                      onFetchMoreIssues,
+                    }) => (
   <div>
     <p>
       <strong>In Repository:</strong>
       <a href={repository.url}>{repository.name}</a>
     </p>
-
     <ul>
       {repository.issues.edges.map(issue => (
         <li key={issue.node.id}>
@@ -145,10 +203,18 @@ const Repository = ({ repository }) => (
         </li>
       ))}
     </ul>
+    <hr />
+    {repository.issues.pageInfo.hasNextPage && (
+      <button onClick={onFetchMoreIssues}>More</button>
+    )}
   </div>
 );
 
-const Organization = ({ organization, errors }) => {
+const Organization = ({
+                        organization,
+                        errors,
+                        onFetchMoreIssues,
+                      }) => {
   if (errors) {
     return (
       <p>
@@ -163,7 +229,10 @@ const Organization = ({ organization, errors }) => {
         <strong>Issues from Organization:</strong>
         <a href={organization.url}>{organization.name}</a>
       </p>
-      <Repository repository={organization.repository} />
+      <Repository
+        repository={organization.repository}
+        onFetchMoreIssues={onFetchMoreIssues}
+      />
     </div>
   );
 };
