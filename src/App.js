@@ -31,19 +31,18 @@ const getIssuesOfRepository = (path, cursor) => {
  * @param repository
  * @returns
  */
-const getIssuesOfRepositoryQuery = (organization, repository) => `
+const getIssuesOfRepositoryQuery = (organization, repository, cursor) => `
   query (
     $organization: String!,
-    $repository: String!
-    $cursor: String
-  ) {
+    $repository: String!,
+    $cursor: String) {
     organization(login: $organization) {
       name
       url
       repository(name: $repository) {
         name
         url
-        issues(last: 5, after: $cursor, states: [OPEN]) {
+				issues(first: 5, after: $cursor, states: [OPEN]) {
           edges {
             node {
               id
@@ -157,7 +156,7 @@ class App extends Component {
           <label htmlFor="url">
             Show open issues for https://github.com/
           </label>
-          <input //input field with onChange handler
+          <input
             id="url"
             type="text"
             value={path}
